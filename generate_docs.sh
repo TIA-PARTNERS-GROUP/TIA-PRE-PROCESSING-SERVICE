@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+sudo apt install graphviz
+
 DOCS_DIR="docs"
 DOXYGEN_DIR="$DOCS_DIR/doxygen"
 DOXYFILE="$DOXYGEN_DIR/Doxyfile"
