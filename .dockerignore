@@ -3,3 +3,5 @@ bin/
 *.swp
 *.o
 .vscode/
+docs/doxygen/
+!docs/doxygen-awesome.css

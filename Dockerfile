@@ -1,5 +1,6 @@
 FROM ubuntu:22.04
 
+# Install dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -10,11 +11,14 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget https://raw.githubusercontent.com/jothepro/doxygen-awesome-css/main/doxygen-awesome.css -O /doxygen-awesome.css
+# Install Doxygen Awesome theme
+RUN mkdir -p /usr/share/doxygen-awesome && \
+    wget https://raw.githubusercontent.com/jothepro/doxygen-awesome-css/main/doxygen-awesome.css -O /usr/share/doxygen-awesome/doxygen-awesome.css
 
 WORKDIR /workspace
 COPY . .
 
-RUN chmod +x generate_docs.sh
+# Create mount point for docs
+RUN mkdir -p /workspace/docs
 
-CMD ["./generate_docs.sh"]
+ENTRYPOINT ["./generate_docs.sh"]
