@@ -5,14 +5,11 @@ DOCS_DIR="/workspace/docs"
 DOXYGEN_DIR="$DOCS_DIR/doxygen"
 DOXYFILE="$DOXYGEN_DIR/Doxyfile"
 
-# Clean previous docs
 rm -rf "$DOXYGEN_DIR"
 mkdir -p "$DOXYGEN_DIR"
 
-# Copy theme
 cp /usr/share/doxygen-awesome/doxygen-awesome.css "$DOXYGEN_DIR/"
 
-# Generate Doxyfile
 cat <<EOF >"$DOXYFILE"
 PROJECT_NAME           = "TIA Pre-Processing"
 PROJECT_NUMBER         = $(git describe --tags || echo "1.0")
@@ -30,13 +27,10 @@ ENABLE_PREPROCESSING   = YES
 PREDEFINED             = TEST_CASE(x)=
 EOF
 
-# Generate docs
 cd "$DOXYGEN_DIR" && doxygen "$DOXYFILE"
 
-# Set permissions
 chmod -R a+rw "$DOCS_DIR"
 
-# Serve docs
 echo "Documentation successfully generated in:"
 echo "$DOCS_DIR/doxygen/html/index.html"
 echo ""
