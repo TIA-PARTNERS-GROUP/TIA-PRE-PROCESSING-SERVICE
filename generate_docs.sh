@@ -1,51 +1,38 @@
 #!/bin/bash
 set -e
 
-sudo apt install graphviz
-
 DOCS_DIR="docs"
 DOXYGEN_DIR="$DOCS_DIR/doxygen"
 DOXYFILE="$DOXYGEN_DIR/Doxyfile"
 
+# Setup directories
 mkdir -p "$DOXYGEN_DIR"
 
-if [ ! -f "$DOXYGEN_DIR/doxygen-awesome.css" ]; then
-  echo ">>> Downloading Doxygen Awesome theme..."
-  wget https://raw.githubusercontent.com/jothepro/doxygen-awesome-css/main/doxygen-awesome.css -O "$DOXYGEN_DIR/doxygen-awesome.css"
-fi
+# Copy theme
+cp /doxygen-awesome.css "$DOXYGEN_DIR/"
 
-echo ">>> Generating Doxyfile..."
+# Generate Doxyfile
 cat <<EOF >"$DOXYFILE"
-# Project
-PROJECT_NAME           = "TIA-PRE-PROCESSING-SERVICE"
-PROJECT_NUMBER         = "1.0"
-OUTPUT_DIRECTORY       = $DOXYGEN_DIR
-
-# Input
+PROJECT_NAME           = "TIA Pre-Processing"
+PROJECT_NUMBER         = $(git describe --tags || echo "1.0")
 INPUT                  = include src test
 RECURSIVE              = YES
 FILE_PATTERNS          = *.h *.hpp *.cpp *.c
-
-# HTML output
+EXCLUDE_PATTERNS       = */CMakeFiles/*
+HAVE_DOT               = YES
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_EXTRA_STYLESHEET  = doxygen-awesome.css
-HTML_COLORSTYLE        = AUTO
-GENERATE_TREEVIEW      = YES
-DISABLE_INDEX          = NO
-FULL_SIDEBAR           = YES
-
-# General documentation
 EXTRACT_ALL            = YES
 EXTRACT_PRIVATE        = YES
-EXTRACT_STATIC         = YES
-SOURCE_BROWSER         = YES
-REFERENCED_BY_RELATION = YES
-REFERENCES_RELATION    = YES
+ENABLE_PREPROCESSING   = YES
+PREDEFINED             = TEST_CASE(x)=
 EOF
 
-echo ">>> Running Doxygen..."
+# Generate docs
 doxygen "$DOXYFILE"
 
-echo ">>> Documentation generated!"
-echo "👉 Open: file://$(realpath "$DOXYGEN_DIR/html/index.html")"
+# Serve docs (optional)
+echo "Documentation available at:"
+echo "http://localhost:8000/"
+python3 -m http.server --directory docs/doxygen/html 8000

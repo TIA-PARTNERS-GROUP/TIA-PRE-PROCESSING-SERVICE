@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  docs:
+    build: .
+    volumes:
+      - .:/workspace
+      - ./docs:/workspace/docs
+    ports:
+      - "8000:8000"
