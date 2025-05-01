@@ -10,6 +10,14 @@ TARGET = $(BIN_DIR)/main
 SRCS = $(wildcard $(SRC_DIR)/*.cpp)
 OBJS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SRCS))
 
+DOCTEST_URL = https://raw.githubusercontent.com/doctest/doctest/master/doctest/doctest.h
+DOCTEST_HEADER = ./external/doctest/doctest.h
+
+$(DOCTEST_HEADER):
+	@echo "Fetching doctest.h..."
+	@mkdir -p include
+	@curl -sSfL $(DOCTEST_URL) -o $(DOCTEST_HEADER)
+
 all: $(TARGET)
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
@@ -18,8 +26,9 @@ $(TARGET): $(OBJS) | $(BIN_DIR)
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-test: all
-	$(MAKE) -C $(TEST_DIR)
+test: $(DOCTEST_HEADER) $(BIN_DIR)/test
+	@echo "Running tests..."
+	@./$(BIN_DIR)/test
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
