@@ -7,8 +7,11 @@ OBJ_DIR = obj
 BIN_DIR = bin
 
 TARGET = $(BIN_DIR)/main
+TEST_TARGET = $(BIN_DIR)/test
 SRCS = $(wildcard $(SRC_DIR)/*.cpp)
+SRCS_TEST = $(wildcard $(TEST_DIR)/*.cpp)
 OBJS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SRCS))
+OBJS_TEST = $(patsubst $(TEST_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SRCS_TEST))
 
 DOCTEST_URL = https://raw.githubusercontent.com/doctest/doctest/master/doctest/doctest.h
 DOCTEST_HEADER = ./external/doctest/doctest.h
@@ -23,12 +26,18 @@ all: $(TARGET)
 $(TARGET): $(OBJS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+$(TEST_TARGET): $(OBJS_TEST) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-test: $(DOCTEST_HEADER) $(BIN_DIR)/test
+$(OBJ_DIR)/%.o: $(TEST_DIR)/%.cpp | $(OBJ_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+test: $(DOCTEST_HEADER) $(TEST_TARGET)
 	@echo "Running tests..."
-	@./$(BIN_DIR)/test
+	@./$(TEST_TARGET)
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
