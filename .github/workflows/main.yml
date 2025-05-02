@@ -1,4 +1,4 @@
-name: Sync Main Dirs into Docs
+name: Sync Main Dirs into Docs Branch
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write 
+  contents: write  # Required to allow git push
 
 jobs:
   sync-main-dirs:
@@ -19,16 +19,16 @@ jobs:
     - name: Fetch main branch
       run: git fetch origin main
 
-    - name: Extract specific directories from main
+    - name: Extract src/include/test/external from main into docs branch
       run: |
         for dir in src include test external; do
           git archive origin/main $dir | tar -x
         done
 
-    - name: Commit and push changes
+    - name: Commit and push changes to docs branch
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
         git add src include test external
-        git commit -m "Sync dirs from main" || echo "No changes to commit"
+        git commit -m "Add src/include/test/external from main to docs" || echo "No changes to commit"
         git push
