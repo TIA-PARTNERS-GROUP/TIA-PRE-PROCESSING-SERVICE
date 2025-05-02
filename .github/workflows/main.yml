@@ -25,6 +25,9 @@ jobs:
 
     - name: Run Docker Compose
       run: sudo docker compose up --build -d
+    - name: Show directory contents
+      run: ls -R
+
       
     - name: Commit and push updated dirs
       run: |
