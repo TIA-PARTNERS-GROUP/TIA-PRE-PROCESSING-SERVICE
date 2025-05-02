@@ -1,4 +1,4 @@
-name: Sync and Build Docs
+name: Add Dirs from Main to Docs
 
 on:
   push:
@@ -6,33 +6,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  update-docs:
+  sync-main-dirs:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout docs branch
       uses: actions/checkout@v4
 
-    - name: Fetch origin/main
+    - name: Fetch main branch
       run: git fetch origin main
 
-    - name: Pull specific directories from main
+    - name: Extract specific directories from main into docs branch
       run: |
         for dir in src include test external; do
           git archive origin/main $dir | tar -x
         done
+    - name: Docker Compose
+      run: docker compose up --build -d
 
-    - name: Confirm docker-compose.yml exists
-      run: test -f docker-compose.yml && echo "Found docker-compose.yml"
-
-    - name: Run Docker Compose
-      run: sudo docker compose up --build -d
-      
-    - name: Commit and push updated dirs
+    - name: Commit and push added dirs
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
-        git restore --staged docs && git restore docs  # <-- prevent deleting docs/
         git add src include test external
-        git commit -m "Update dirs from main" || echo "No changes to commit"
+        git commit -m "Sync src/include/test/external from main" || echo "No changes to commit"
         git push
