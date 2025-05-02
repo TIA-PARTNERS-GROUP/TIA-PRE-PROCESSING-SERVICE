@@ -21,8 +21,6 @@ jobs:
         for dir in src include test external; do
           git archive origin/main $dir | tar -x
         done
-    - name: Docker Compose
-      run: docker compose up --build -d
 
     - name: Commit and push added dirs
       run: |
