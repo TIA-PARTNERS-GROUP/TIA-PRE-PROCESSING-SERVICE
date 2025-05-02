@@ -17,7 +17,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Fetch main branch
-      run: git fetch origin main
+      run: git pull origin main
 
     - name: Extract src/include/test/external from main into docs branch
       run: |
