@@ -1,4 +1,4 @@
-name: Update Docs Branch from Main
+name: Sync Code and Build Docs
 
 on:
   push:
@@ -6,28 +6,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync-and-compose:
+  build:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout docs branch
       uses: actions/checkout@v4
 
-    - name: Fetch main branch
+    - name: Fetch latest main
       run: git fetch origin main
 
-    - name: Checkout specific dirs from main
-      run: |
-        git checkout origin/main -- src include test external
+    - name: Pull needed dirs from main
+      run: git checkout origin/main -- src include test external
 
-    - name: List files (debug)
-      run: ls -R
+    - name: Confirm docker-compose.yml is present
+      run: ls -l docker-compose.yml
 
     - name: Run Docker Compose
-      run: sudo docker compose up --build -d
-    - name: Show directory contents
-      run: ls -R
-
+      run: docker compose up --build -d
       
     - name: Commit and push updated dirs
       run: |
