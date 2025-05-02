@@ -1,4 +1,4 @@
-name: Sync Code and Build Docs
+name: Sync and Build Docs
 
 on:
   push:
@@ -6,24 +6,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  update-docs:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout docs branch
       uses: actions/checkout@v4
 
-    - name: Fetch latest main
+    - name: Fetch origin/main
       run: git fetch origin main
 
-    - name: Pull needed dirs from main
-      run: git checkout origin/main -- src include test external
+    - name: Pull specific directories from main
+      run: |
+        for dir in src include test external; do
+          git archive origin/main $dir | tar -x
+        done
 
-    - name: Confirm docker-compose.yml is present
-      run: ls -l docker-compose.yml
+    - name: Confirm docker-compose.yml exists
+      run: test -f docker-compose.yml && echo "Found docker-compose.yml"
 
     - name: Run Docker Compose
-      run: docker compose up --build -d
+      run: sudo docker compose up --build -d
       
     - name: Commit and push updated dirs
       run: |
