@@ -1,0 +1,36 @@
+name: Update Docs Branch from Main
+
+on:
+  push:
+    branches: [docs]
+  workflow_dispatch:
+
+jobs:
+  sync-and-compose:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout docs branch
+      uses: actions/checkout@v4
+
+    - name: Fetch main branch
+      run: git fetch origin main
+
+    - name: Checkout specific dirs from main
+      run: |
+        git checkout origin/main -- src include test external
+
+    - name: List files (debug)
+      run: ls -R
+
+    - name: Run Docker Compose
+      run: docker-compose up --build -d
+      
+    - name: Commit and push updated dirs
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git restore --staged docs && git restore docs  # <-- prevent deleting docs/
+        git add src include test external
+        git commit -m "Update dirs from main" || echo "No changes to commit"
+        git push
