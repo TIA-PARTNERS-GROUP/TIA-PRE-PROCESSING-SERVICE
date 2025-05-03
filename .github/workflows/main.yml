@@ -1,4 +1,4 @@
-name: Sync Main Dirs into Docs Branch
+name: Documentation Generation
 
 on:
   push:
@@ -38,3 +38,6 @@ jobs:
         git add src include test external
         git commit -m "Sync src/include/test/external from main" || echo "No changes to commit"
         git push
+
+    - name: Gnerate Docs
+      run: docker compose up --build -d
