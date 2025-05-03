@@ -2,7 +2,7 @@
 
 
 void a(int a) {
-  printf"%a", a);
+  printf"%d", a);
 }
 
 int main (int argc, char *argv[]) { 
