@@ -33,7 +33,5 @@ chmod -R a+rw "$DOCS_DIR"
 
 echo "Documentation successfully generated in:"
 echo "$DOCS_DIR/doxygen/html/index.html"
-echo ""
-echo "To view docs locally: http://localhost:8000/"
 
-exec python3 -m http.server --directory $DOCS_DIR/doxygen/html 8000
+open ./docs/doxygen/html/index.html
