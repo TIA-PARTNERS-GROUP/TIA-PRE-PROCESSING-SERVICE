@@ -1,8 +1,12 @@
 #include <stdio.h>
 
 
-void a(int a) {
-  printf"%d", a);
+int a(int a) {
+  a = 1;
+  
+  a * a;
+
+  return a;
 }
 
 int main (int argc, char *argv[]) { 
