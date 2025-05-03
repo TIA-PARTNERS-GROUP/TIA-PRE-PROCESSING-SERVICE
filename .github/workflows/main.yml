@@ -1,0 +1,43 @@
+name: Documentation Generation
+
+on:
+  push:
+    branches: [docs]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-main-dirs:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout docs branch
+      uses: actions/checkout@v4
+      with:
+        ref: docs
+
+    - name: Checkout main branch to temp directory
+      uses: actions/checkout@v4
+      with:
+        ref: main
+        path: main_branch
+
+    - name: Copy selected dirs from main to docs
+      run: |
+        cp -r main_branch/src .
+        cp -r main_branch/include .
+        cp -r main_branch/test .
+        cp -r main_branch/external .
+
+    - name: Commit and push changes to docs branch
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add src include test external
+        git commit -m "Sync src/include/test/external from main" || echo "No changes to commit"
+        git push
+
+    - name: Gnerate Docs
+      run: docker compose up --build -d
