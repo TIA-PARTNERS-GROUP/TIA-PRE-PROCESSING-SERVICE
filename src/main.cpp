@@ -1,7 +1,8 @@
 #include <stdio.h>
 
 
-void a() {
+void a(int a) {
+  printf"%a", a);
 }
 
 int main (int argc, char *argv[]) { 
