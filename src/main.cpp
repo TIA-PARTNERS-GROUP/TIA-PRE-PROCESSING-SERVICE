@@ -1,6 +1,14 @@
 #include <stdio.h>
 
 
+int b(int a) {
+  a = 1;
+  
+  a * a;
+
+  return a;
+}
+
 int a(int a) {
   a = 1;
   
