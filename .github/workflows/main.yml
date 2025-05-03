@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # Required to allow git push
+  contents: write
 
 jobs:
   sync-main-dirs:
@@ -15,20 +15,26 @@ jobs:
     steps:
     - name: Checkout docs branch
       uses: actions/checkout@v4
+      with:
+        ref: docs
 
-    - name: Fetch main branch
-      run: git pull origin main
+    - name: Checkout main branch to temp directory
+      uses: actions/checkout@v4
+      with:
+        ref: main
+        path: main_branch
 
-    - name: Extract src/include/test/external from main into docs branch
+    - name: Copy selected dirs from main to docs
       run: |
-        for dir in src include test external; do
-          git archive origin/main $dir | tar -x
-        done
+        cp -r main_branch/src .
+        cp -r main_branch/include .
+        cp -r main_branch/test .
+        cp -r main_branch/external .
 
     - name: Commit and push changes to docs branch
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
         git add src include test external
-        git commit -m "Add src/include/test/external from main to docs" || echo "No changes to commit"
+        git commit -m "Sync src/include/test/external from main" || echo "No changes to commit"
         git push
