@@ -1,7 +1,7 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -Iinclude -std=c++17
 
-LDFLAGS = $(shell mariadb_config --libs) -L/usr/local/lib -lmgclient
+LDFLAGS = $(shell mariadb_config --libs) -lrdkafka -lrdkafka++ -L/usr/local/lib -lmgclient
 
 SRC_DIR = src
 TEST_DIR = test

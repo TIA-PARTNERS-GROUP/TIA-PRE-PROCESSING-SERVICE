@@ -1,9 +1,9 @@
-FROM ubuntu:latest as builder
+# Stage 1: The Builder
+FROM ubuntu:latest AS builder
 
-# Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all build dependencies using apt-get
+# Install all build dependencies
 RUN apt-get update && apt-get install -y \
   g++ \
   make \
@@ -13,51 +13,60 @@ RUN apt-get update && apt-get install -y \
   libssl-dev \
   pkg-config \
   libmariadb-dev \
+  librdkafka-dev \
   ca-certificates \
-  wget \
-  gnupg \
+  curl \
   --no-install-recommends
 
-RUN apt-get install -y git cmake make g++ libssl-dev && \
-  git clone --recursive https://github.com/memgraph/mgclient.git /tmp/mgclient && \
-  cd /tmp/mgclient && \
+# Build and install mgclient
+WORKDIR /tmp
+RUN git clone https://github.com/memgraph/mgclient.git && \
+  cd mgclient && \
   mkdir build && cd build && \
-  cmake .. && \
+  cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && \
   make -j$(nproc) && \
-  make install && \
-  ldconfig
+  make install
 
-# --- Now, build your application ---
+# Download nlohmann/json header
 WORKDIR /app
+RUN mkdir -p include/nlohmann && \
+  curl -L https://github.com/nlohmann/json/releases/latest/download/json.hpp -o include/nlohmann/json.hpp
+
+# Copy application source and build
 COPY . .
-# This 'make' command will succeed because all dependencies are installed
 RUN make
 
-# Stage 2: The Final Image
+# Stage 2: The Final Runtime Image
 FROM ubuntu:latest
-
-# Create a non-root user for security
-RUN useradd -m myapp
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
-  libssl3 \
-  ca-certificates \
+  librdkafka++1 \
+  libmariadb3 \
+  openssl \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy the required runtime libraries from the builder stage
-COPY --from=builder /usr/lib/x86_64-linux-gnu/libmariadb.so.3 /usr/lib/x86_64-linux-gnu/
-COPY --from=builder /usr/lib/x86_64-linux-gnu/libmgclient.so* /usr/lib/x86_64-linux-gnu/
-COPY --from=builder /usr/lib/libmgclient.so* /usr/lib/ 
+# Copy mgclient shared libraries explicitly
+COPY --from=builder /usr/local/lib/libmgclient.so* /usr/lib/
 
-# Run ldconfig to update the dynamic linker cache in the final image
+# Copy MariaDB lib in case it's needed
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libmariadb.so.3 /usr/lib/x86_64-linux-gnu/
+
+# Refresh the dynamic linker cache
 RUN ldconfig
 
+# Optional: Set LD_LIBRARY_PATH to help the linker
+ENV LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
+
+# Create non-root user and set working dir
+RUN useradd -m myapp
 USER myapp
 WORKDIR /home/myapp
 
-# Copy your compiled application from the builder stage
-COPY --from=builder /app/bin/main /usr/local/bin/main
+# Copy built binary
+COPY --from=builder /app/bin/main .
 
-# Set the default command
-CMD ["main"]
+# Confirm the binary can find all its linked libraries (for debugging)
+# RUN ldd ./main  # Uncomment this line to debug inside image build
+
+CMD ["./main"]
