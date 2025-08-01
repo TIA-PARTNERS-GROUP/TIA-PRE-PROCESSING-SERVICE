@@ -1,0 +1,119 @@
+services:
+  # --- MariaDB Service ---
+  mariadb:
+    image: mariadb:latest
+    restart: always
+    environment:
+      MARIADB_ROOT_PASSWORD: devpasswordroot
+      MARIADB_DATABASE: dev_tia_db
+      MARIADB_USER: tia_dev_user
+      MARIADB_PASSWORD: devpassword
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./db:/docker-entrypoint-initdb.d  # Mount your SQL dump
+    ports:
+      - "3308:3306"
+    command: 
+      - '--log-bin'
+      - '--binlog_format=ROW'
+      - '--server-id=1'
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb -u tia_dev_user -pdevpassword -e 'SHOW TABLES' dev_tia_db || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Memgraph Service ---
+  memgraph:
+    image: memgraph/memgraph-platform
+    restart: always
+    ports:
+      - "7687:7687"
+      - "3000:3000"
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7687"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- Kafka Cluster ---
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    ports:
+      - "2181:2181"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:3.4
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      #start_period: 90s
+
+  # --- Debezium CDC Connector ---
+  connect:
+    image: debezium/connect:2.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: 'kafka:9092'
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- Application Service ---
+  app:
+    build: 
+      context: ./app
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      memgraph:
+        condition: service_healthy
+      connect:
+        condition: service_healthy
+    environment:
+      - MG_HOST=memgraph
+      - MG_PORT=7687
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=tia_dev_user
+      - DB_PASSWORD=devpassword
+      - DB_NAME=dev_tia_db
+
+volumes:
+  mariadb_data:
+  memgraph_data:

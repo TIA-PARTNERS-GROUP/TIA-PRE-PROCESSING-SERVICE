@@ -1,6 +1,8 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -Iinclude -std=c++17
 
+LDFLAGS = $(shell mariadb_config --libs) -L/usr/local/lib -lmgclient
+
 SRC_DIR = src
 TEST_DIR = test
 OBJ_DIR = obj
@@ -24,10 +26,10 @@ $(DOCTEST_HEADER):
 all: $(TARGET)
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(TEST_TARGET): $(OBJS_TEST) | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
