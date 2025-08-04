@@ -5,11 +5,10 @@
 #include <vector>
 
 // 3rd-party libraries
-#include "../external/json.hpp"
+#include "../external/json.hpp" // Correct include path based on your Dockerfile
 #include <librdkafka/rdkafkacpp.h>
-#include <mgclient.h>
+#include <mgclient.hpp> // Use the C++ wrapper header
 
-// Use the nlohmann/json library
 using json = nlohmann::json;
 
 // Global flag for graceful shutdown
@@ -42,25 +41,33 @@ RdKafka::KafkaConsumer *initialize_kafka_consumer() {
   return consumer;
 }
 
-mg_session *initialize_memgraph_session() {
-  mg_session_params *params = mg_session_params_make();
-  mg_session_params_set_host(params, "memgraph");
-  mg_session_params_set_port(params, 7687);
+// Reverted to initializing a C++ mg::Client object
+std::unique_ptr<mg::Client> initialize_memgraph_client() {
+  mg::Client::Params params;
+  params.host = "memgraph";
+  params.port = 7687;
 
-  mg_session *session;
-  if (mg_connect(params, &session) != 0) {
-    mg_session_params_destroy(params);
+  auto client = mg::Client::Connect(params);
+  if (!client) {
     throw std::runtime_error("Failed to connect to Memgraph.");
   }
 
-  mg_session_params_destroy(params);
   std::cout << "✅ Connection to Memgraph successful!" << std::endl;
-  return session;
+  return client;
 }
 
-// --- Message Processing Function ---
+// --- DEBUGGING: Test Function ---
+void run_memgraph_test_query(mg::Client *client) {
+  std::cout << "\n[TEST] Running a simple test query..." << std::endl;
+  if (!client->Execute("CREATE (n:TestNode {property: 'hello world'})")) {
+    throw std::runtime_error("Test query failed: ");
+  }
+  client->DiscardAll();
+  std::cout << "[TEST] Test query successful!" << std::endl;
+}
 
-void process_message(RdKafka::Message *msg, mg_session *memgraph_session) {
+// Reverted to using the C++ API
+void process_message(RdKafka::Message *msg, mg::Client *client) {
   if (msg->len() == 0) {
     std::cout
         << "\n[INFO] Received empty message (likely delete event). Skipping."
@@ -71,7 +78,7 @@ void process_message(RdKafka::Message *msg, mg_session *memgraph_session) {
   const char *payload_str = static_cast<const char *>(msg->payload());
 
   try {
-    auto dbz_event = json::parse(payload_str);
+    auto dbz_event = json::parse(std::string_view(payload_str, msg->len()));
 
     if (dbz_event.contains("payload") && !dbz_event["payload"].is_null() &&
         dbz_event["payload"].contains("after") &&
@@ -80,7 +87,6 @@ void process_message(RdKafka::Message *msg, mg_session *memgraph_session) {
       auto &user_data = dbz_event["payload"]["after"];
       int user_id = user_data["id"].get<int>();
 
-      // --- FIX: Check for null before getting string values ---
       std::string first_name = user_data["first_name"].is_null()
                                    ? ""
                                    : user_data["first_name"].get<std::string>();
@@ -88,80 +94,86 @@ void process_message(RdKafka::Message *msg, mg_session *memgraph_session) {
                                   ? ""
                                   : user_data["last_name"].get<std::string>();
 
-      // --- ADDED: Print extracted user data ---
       std::cout << "\n[DATA] Preparing to sync user data:" << std::endl;
       std::cout << "  - ID: " << user_id << std::endl;
       std::cout << "  - First Name: " << first_name << std::endl;
       std::cout << "  - Last Name: " << last_name << std::endl;
       std::cout << "[QUERY] Executing Cypher..." << std::endl;
 
-      // Use parameterized queries for safety
-      mg_map *params = mg_map_make_empty(3);
-      mg_map_insert(params, "id", mg_value_make_integer(user_id));
-      mg_map_insert(params, "firstName",
-                    mg_value_make_string(first_name.c_str()));
-      mg_map_insert(params, "lastName",
-                    mg_value_make_string(last_name.c_str()));
+      mg::Map params(3);
+      params.Insert("id", mg::Value(user_id));
+      params.Insert("firstName", mg::Value(first_name));
+      params.Insert("lastName", mg::Value(last_name));
 
       const char *query = "MERGE (u:User {id: $id}) SET u.firstName = "
                           "$firstName, u.lastName = $lastName";
 
-      if (mg_session_run(memgraph_session, query, params, NULL, NULL, NULL) !=
-          0) {
-        std::cerr << "[ERROR] mg_session_run failed for user " << user_id
-                  << ": " << mg_session_error(memgraph_session) << std::endl;
-      } else if (mg_session_pull(memgraph_session, NULL) < 0) {
-        std::cerr << "[ERROR] mg_session_pull failed for user " << user_id
-                  << ": " << mg_session_error(memgraph_session) << std::endl;
-      } else {
-        std::cout << "[SUCCESS] Processed user ID: " << user_id << std::endl;
+      if (!client->Execute(query, params.AsConstMap())) {
+        throw std::runtime_error("Failed to execute query for user " +
+                                 std::to_string(user_id));
       }
-      mg_map_destroy(params);
 
+      client->DiscardAll();
+
+      std::cout << "[SUCCESS] Processed user ID: " << user_id << std::endl;
     } else {
       std::cout << "\n[INFO] Received message that was not a create/update "
                    "event. Skipping."
                 << std::endl;
     }
-  } catch (const std::exception &e) { // Catch any standard exception
-    std::cerr << "\n[ERROR] Failed to process message: " << e.what()
-              << std::endl;
+  } catch (const json::parse_error &e) {
+    throw std::runtime_error(std::string("Failed to parse JSON message: ") +
+                             e.what());
+  } catch (const std::exception &e) {
+    throw std::runtime_error(std::string("Failed to process message: ") +
+                             e.what());
   }
 }
-
 // --- Main Application Loop ---
 
 int main() {
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
+  // ADDED: Initialize the mgclient library
+  mg::Client::Init();
+
   RdKafka::KafkaConsumer *consumer = nullptr;
-  mg_session *memgraph_session = nullptr;
+  std::unique_ptr<mg::Client> memgraph_client;
 
   try {
     consumer = initialize_kafka_consumer();
-    memgraph_session = initialize_memgraph_session();
+    memgraph_client = initialize_memgraph_client();
 
-    std::cout << "Starting consumer loop..." << std::endl;
+    run_memgraph_test_query(memgraph_client.get());
+
+    std::cout << "\nStarting consumer loop...\n" << std::endl;
     while (!shutdown_requested) {
       RdKafka::Message *msg = consumer->consume(1000);
 
-      switch (msg->err()) {
-      case RdKafka::ERR_NO_ERROR:
-        process_message(msg, memgraph_session);
-        break;
-      case RdKafka::ERR__TIMED_OUT:
-        std::cout << "\rWaiting for messages..." << std::flush;
-        break;
-      default:
-        std::cerr << "\n[ERROR] Consumer error: " << msg->errstr() << std::endl;
-        break;
+      try {
+        switch (msg->err()) {
+        case RdKafka::ERR_NO_ERROR:
+          process_message(msg, memgraph_client.get());
+          break;
+        case RdKafka::ERR__TIMED_OUT:
+          break;
+        default:
+          std::cerr << "\n[WARNING] Consumer error: " << msg->errstr()
+                    << std::endl;
+          break;
+        }
+      } catch (const std::runtime_error &e) {
+        std::cerr << "\n[ERROR] Could not process message: " << e.what()
+                  << std::endl;
       }
       delete msg;
     }
 
   } catch (const std::exception &e) {
     std::cerr << "A critical error occurred: " << e.what() << std::endl;
+    mg::Client::Finalize(); // Finalize even on error
+    return 1;
   }
 
   // --- Cleanup ---
@@ -170,9 +182,9 @@ int main() {
     consumer->close();
     delete consumer;
   }
-  if (memgraph_session) {
-    mg_session_destroy(memgraph_session);
-  }
+
+  // ADDED: Finalize the mgclient library
+  mg::Client::Finalize();
 
   return 0;
 }

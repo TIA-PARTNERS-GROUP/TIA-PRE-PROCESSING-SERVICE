@@ -1,0 +1,6 @@
+# Ignore the CMake build directory
+build/
+
+# Ignore git files
+.git
+.gitignore

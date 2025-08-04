@@ -9,10 +9,16 @@ RUN apt-get update && apt-get install -y \
   make \
   git \
   cmake \
+  clang \
   openssl \
+  build-essential \
   libssl-dev \
   pkg-config \
   libmariadb-dev \
+  liblz4-dev \
+  zlib1g-dev \
+  libssl-dev \
+  libsasl2-dev \
   librdkafka-dev \
   ca-certificates \
   curl \
@@ -32,9 +38,14 @@ WORKDIR /app
 RUN mkdir -p include/nlohmann && \
   curl -L https://github.com/nlohmann/json/releases/latest/download/json.hpp -o include/nlohmann/json.hpp
 
-# Copy application source and build
+# Copy application source (including CMakeLists.txt)
 COPY . .
-RUN make
+
+# --- UPDATED: Use CMake to configure and build the project ---
+RUN mkdir build && \
+  cd build && \
+  cmake .. && \
+  make -j$(nproc)
 
 # Stage 2: The Final Runtime Image
 FROM ubuntu:latest
@@ -46,27 +57,19 @@ RUN apt-get update && apt-get install -y \
   openssl \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy mgclient shared libraries explicitly
+# Copy mgclient shared libraries explicitly from the builder stage
 COPY --from=builder /usr/local/lib/libmgclient.so* /usr/lib/
 
-# Copy MariaDB lib in case it's needed
-COPY --from=builder /usr/lib/x86_64-linux-gnu/libmariadb.so.3 /usr/lib/x86_64-linux-gnu/
-
-# Refresh the dynamic linker cache
+# Refresh the dynamic linker cache to recognize the new libraries
 RUN ldconfig
 
-# Optional: Set LD_LIBRARY_PATH to help the linker
-ENV LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
-
-# Create non-root user and set working dir
+# Create non-root user and set working dir for security
 RUN useradd -m myapp
 USER myapp
 WORKDIR /home/myapp
 
-# Copy built binary
-COPY --from=builder /app/bin/main .
-
-# Confirm the binary can find all its linked libraries (for debugging)
-# RUN ldd ./main  # Uncomment this line to debug inside image build
+# Copy the built binary from the builder stage
+# The CMakeLists.txt places the executable in /app/bin/
+COPY --from=builder /app/build/bin/main .
 
 CMD ["./main"]
