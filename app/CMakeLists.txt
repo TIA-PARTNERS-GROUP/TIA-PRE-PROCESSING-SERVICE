@@ -65,7 +65,12 @@ add_dependencies(nlohmann_json json-proj)
 # --- Define the Executable Target ---
 
 # This is the key fix: Point to the source file inside the 'src' directory.
-add_executable(memgraph-sync-service src/main.cpp)
+add_executable(memgraph-sync-service
+  src/main.cpp
+  src/kafka_client.cpp
+  src/memgraph_client.cpp
+  src/message_handler.cpp
+)
 
 # The Dockerfile expects the final binary to be named 'main'.
 set_target_properties(memgraph-sync-service PROPERTIES OUTPUT_NAME "main")
