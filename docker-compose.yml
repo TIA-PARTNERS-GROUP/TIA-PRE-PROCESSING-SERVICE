@@ -25,7 +25,7 @@ services:
 
   # --- Memgraph Service ---
   memgraph:
-    image: memgraph/memgraph-platform # Pinned version
+    image: memgraph/memgraph-platform
     restart: always
     ports:
       - "7687:7687"
@@ -40,7 +40,7 @@ services:
 
   # --- Kafka Cluster ---
   zookeeper:
-    image: bitnami/zookeeper:3.9 # Pinned version
+    image: bitnami/zookeeper:3.9
     ports:
       - "2181:2181"
     environment:
@@ -52,7 +52,7 @@ services:
       retries: 5
 
   kafka:
-    image: bitnami/kafka:3.7 # Pinned version
+    image: bitnami/kafka:3.7
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -71,7 +71,7 @@ services:
 
   # --- Debezium CDC Connector ---
   connect:
-    image: debezium/connect:2.6 # Pinned version
+    image: debezium/connect:2.6
     depends_on:
       kafka:
         condition: service_healthy
@@ -92,7 +92,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # --- NEW: Debezium Connector Initializer ---
+  # --- Debezium Connector Initializer ---
   init-debezium:
     image: curlimages/curl:8.9.0
     depends_on:
@@ -103,11 +103,7 @@ services:
         echo 'Waiting for Kafka Connect to be ready...'
         sleep 15
         echo 'Registering MariaDB connector...'
-        curl -i -X POST \
-          -H 'Accept:application/json' \
-          -H 'Content-Type:application/json' \
-          http://connect:8083/connectors/ \
-          -d '{
+        curl -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json' http://connect:8083/connectors/ -d '{
                 \"name\": \"tia-mariadb-connector\",
                 \"config\": {
                   \"connector.class\": \"io.debezium.connector.mysql.MySqlConnector\",
@@ -125,7 +121,6 @@ services:
               }'
         echo 'Connector registered!'
       "
-
   # --- Application Service ---
   app:
     build: 
@@ -137,7 +132,6 @@ services:
         condition: service_healthy
       memgraph:
         condition: service_healthy
-      # MODIFIED: App now waits for the initializer to complete
       init-debezium:
         condition: service_completed_successfully
     environment:
@@ -152,3 +146,4 @@ services:
 volumes:
   mariadb_data:
   memgraph_data:
+
