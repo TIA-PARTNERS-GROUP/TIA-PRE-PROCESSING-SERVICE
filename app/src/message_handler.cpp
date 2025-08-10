@@ -1,13 +1,24 @@
-#include "../include/message_handler.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <string>
 #include <string_view>
 
+#include "../include/message_handler.hpp"
+
 // --- Helper Functions ---
 
-// Safely gets a string from JSON or returns a default value.
+/// <summary>
+/// Safely retrieves a string from a JSON object. If the key doesn't exist, is
+/// null, or the value is a number, it handles the conversion or returns a
+/// default value.
+/// </summary>
+/// <param name="j">The constant reference to the JSON object to query.</param>
+/// <param name="key">The key of the value to retrieve.</param>
+/// <param name="def">The default string to return if the key is not found or
+/// the value is null. Defaults to an empty string.</param> <returns>The
+/// retrieved string, a string representation of a number, or the default
+/// value.</returns>
 std::string get_string_or_default(const json &j, const char *key,
                                   const std::string &def = "") {
   if (j.contains(key) && !j[key].is_null()) {
@@ -20,8 +31,14 @@ std::string get_string_or_default(const json &j, const char *key,
   return def;
 }
 
-// Converts a snake_case string to PascalCase for node labels.
-// It also handles basic pluralization (e.g., "users" -> "User").
+/// <summary>
+/// Converts a snake_case string to PascalCase for use as a graph node label.
+/// It capitalizes the first letter, removes underscores, and capitalizes the
+/// letter following an underscore. It also performs basic singularization
+/// (e.g., "users" becomes "User", "countries" becomes "Country").
+/// </summary>
+/// <param name="s">The input string in snake_case.</param>
+/// <returns>A string converted to PascalCase.</returns>
 std::string to_pascal_case(std::string s) {
   if (s.empty())
     return "";
@@ -48,7 +65,18 @@ std::string to_pascal_case(std::string s) {
 
 // --- Generic Mapping Functions ---
 
-// Generic function to create or delete a node and its properties.
+/// <summary>
+/// Creates, updates, or deletes a node in Memgraph.
+/// For create/update ('c'/'u'), it uses MERGE to create the node if it doesn't
+/// exist and sets/updates its properties. For delete ('d'), it finds the node
+/// by its ID and performs a DETACH DELETE.
+/// </summary>
+/// <param name="data">The JSON object containing the node's properties,
+/// including a unique 'id'.</param> <param name="op">The character representing
+/// the operation: 'c' (create), 'u' (update), or 'd' (delete).</param> <param
+/// name="label">The label to be used for the node in Memgraph.</param> <param
+/// name="client">A reference to the active MemgraphClient for query
+/// execution.</param>
 void map_node(const json &data, char op, const std::string &label,
               MemgraphClient &client) {
   const std::string query =
@@ -75,7 +103,22 @@ void map_node(const json &data, char op, const std::string &label,
   client.ExecuteQuery(query, params);
 }
 
-// Generic function to create or delete a relationship between two nodes.
+/// <summary>
+/// Creates or deletes a relationship between two existing nodes in Memgraph.
+/// It uses foreign key columns from the source data to identify the start and
+/// end nodes.
+/// </summary>
+/// <param name="data">The JSON object containing the foreign keys for the
+/// relationship.</param> <param name="op">The character representing the
+/// operation: 'c'/'u' (create) or 'd' (delete).</param> <param
+/// name="from_label">The label of the source node for the relationship.</param>
+/// <param name="to_label">The label of the target node for the
+/// relationship.</param> <param name="rel_type">The type of the relationship
+/// (e.g., "HAS_SKILL").</param> <param name="from_fk_col">The column name in
+/// 'data' that holds the ID of the source node.</param> <param
+/// name="to_fk_col">The column name in 'data' that holds the ID of the target
+/// node.</param> <param name="client">A reference to the active MemgraphClient
+/// for query execution.</param>
 void map_relationship(const json &data, char op, const std::string &from_label,
                       const std::string &to_label, const std::string &rel_type,
                       const std::string &from_fk_col,
@@ -95,6 +138,17 @@ void map_relationship(const json &data, char op, const std::string &from_label,
 
 // --- Main Processing Logic ---
 
+/// <summary>
+/// Processes a single Kafka message, expected to be a Debezium CDC event in
+/// JSON format. It parses the message, identifies the database operation and
+/// source table, and then routes the data to the appropriate mapping function
+/// to reflect the change in Memgraph.
+/// </summary>
+/// <param name="msg">A pointer to the consumed RdKafka::Message to be
+/// processed.</param> <param name="memgraphClient">A reference to the
+/// MemgraphClient used for all database interactions.</param> <exception
+/// cref="std::runtime_error">Throws if message processing fails, e.g., due to
+/// JSON parsing errors.</exception>
 void MessageHandler::Process(RdKafka::Message *msg,
                              MemgraphClient &memgraphClient) {
   if (msg->len() == 0)
@@ -117,6 +171,8 @@ void MessageHandler::Process(RdKafka::Message *msg,
     std::string node_label = to_pascal_case(table);
 
     // --- MAPPING ROUTER ---
+    // This section acts as a router, directing the data from a specific table
+    // to the correct sequence of node and relationship mapping functions.
 
     // -- Entity Tables that ALSO define relationships (One-to-Many) --
     if (table == "projects") {

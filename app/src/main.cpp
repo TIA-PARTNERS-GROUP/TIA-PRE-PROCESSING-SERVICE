@@ -6,25 +6,47 @@
 #include "../include/memgraph_client.hpp"
 #include "../include/message_handler.hpp"
 
-// Global flag for graceful shutdown
+/// <summary>
+/// A global, thread-safe flag to signal that the application should shut down
+/// gracefully. It is of type 'volatile sig_atomic_t' to ensure safe access from
+/// a signal handler.
+/// </summary>
 volatile sig_atomic_t shutdown_requested = 0;
 
+/// <summary>
+/// Signal handler for SIGINT (Ctrl+C) and SIGTERM. Sets the global
+/// shutdown_requested flag.
+/// </summary>
+/// <param name="sig">The signal number that was caught.</param>
 void signal_handler(int sig) { shutdown_requested = 1; }
 
+/// <summary>
+/// The main entry point for the Kafka-to-Memgraph synchronization service.
+/// This application connects to a Kafka cluster, subscribes to a set of topics
+/// representing database change events (CDC), and processes these messages to
+/// update a Memgraph graph database. It handles graceful shutdown via SIGINT
+/// and SIGTERM signals.
+/// </summary>
+/// <returns>0 on successful execution and graceful shutdown, 1 on a critical
+/// error.</returns>
 int main() {
+  // Register signal handlers for graceful shutdown.
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
-  // Initialize required libraries
+  // Initialize required third-party libraries.
   mg::Client::Init();
 
   try {
     // 1. Initialize Clients
+    // Establish connections to Kafka and Memgraph.
     KafkaClient kafka("kafka:9092", "memgraph-sync-service");
     MemgraphClient memgraph("memgraph", 7687);
     MessageHandler handler;
 
-    // 2. Subscribe to ALL Kafka Topics (UPDATED AND COMPLETE)
+    // 2. Subscribe to ALL Kafka Topics
+    // The topics list corresponds to Debezium topics for tables in a relational
+    // database.
     std::vector<std::string> topics = {
         "tia_server.dev_tia_db.business_categories",
         "tia_server.dev_tia_db.business_connections",
@@ -65,18 +87,21 @@ int main() {
         "tia_server.dev_tia_db.users"};
     kafka.Subscribe(topics);
 
-    // 3. Run a quick test to ensure Memgraph is working
+    // 3. Run a quick test to ensure Memgraph is working and accessible.
     memgraph.RunTestQuery();
 
     std::cout << "\nStarting consumer loop... (Press Ctrl+C to exit)\n"
               << std::endl;
 
     // 4. Main Application Loop
+    // Continuously polls Kafka for new messages until a shutdown is requested.
     while (!shutdown_requested) {
+      // Consume a message with a 1-second timeout.
       std::unique_ptr<RdKafka::Message> msg(kafka.Consume(1000));
 
       switch (msg->err()) {
       case RdKafka::ERR_NO_ERROR:
+        // A valid message was received.
         try {
           handler.Process(msg.get(), memgraph);
         } catch (const std::runtime_error &e) {
@@ -85,10 +110,10 @@ int main() {
         }
         break;
       case RdKafka::ERR__TIMED_OUT:
-        // This is expected when no new messages are available
+        // No message received within the timeout. This is normal and expected.
         break;
       default:
-        // Handle other Kafka consumer errors
+        // An actual Kafka consumer error occurred.
         std::cerr << "\n[WARNING] Consumer error: " << msg->errstr()
                   << std::endl;
         break;
@@ -98,11 +123,13 @@ int main() {
   } catch (const std::exception &e) {
     std::cerr << "A critical error occurred during setup: " << e.what()
               << std::endl;
+    // Ensure cleanup is still performed on catastrophic failure.
     mg::Client::Finalize();
     return 1;
   }
 
   // 5. Cleanup
+  // Perform a clean shutdown of all client libraries.
   std::cout << "\nShutting down gracefully..." << std::endl;
   mg::Client::Finalize();
 
