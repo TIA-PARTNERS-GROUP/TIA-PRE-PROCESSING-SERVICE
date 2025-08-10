@@ -11,16 +11,31 @@
 std::string get_string_or_default(const json &j, const char *key,
                                   const std::string &def = "") {
   if (j.contains(key) && !j[key].is_null()) {
+    // Check if it's a number and convert to string if so
+    if (j[key].is_number()) {
+      return std::to_string(j[key].get<double>());
+    }
     return j[key].get<std::string>();
   }
   return def;
 }
 
-// Converts a snake_case string to PascalCase for node labels (e.g.,
-// "user_skills" -> "UserSkill").
+// Converts a snake_case string to PascalCase for node labels.
+// It also handles basic pluralization (e.g., "users" -> "User").
 std::string to_pascal_case(std::string s) {
   if (s.empty())
     return "";
+
+  // Handle pluralization (C++17 compatible)
+  if (s.length() >= 3 && s.substr(s.length() - 3) == "ies") {
+    s.pop_back();
+    s.pop_back();
+    s.pop_back();
+    s += "y";
+  } else if (!s.empty() && s.back() == 's') {
+    s.pop_back();
+  }
+
   s[0] = std::toupper(s[0]);
   for (size_t i = 1; i < s.length(); ++i) {
     if (s[i - 1] == '_') {
@@ -33,7 +48,7 @@ std::string to_pascal_case(std::string s) {
 
 // --- Generic Mapping Functions ---
 
-// Generic function to create or delete a node.
+// Generic function to create or delete a node and its properties.
 void map_node(const json &data, char op, const std::string &label,
               MemgraphClient &client) {
   const std::string query =
@@ -102,20 +117,71 @@ void MessageHandler::Process(RdKafka::Message *msg,
     std::string node_label = to_pascal_case(table);
 
     // --- MAPPING ROUTER ---
-    // This router directs each table to the correct mapping logic.
 
+    // -- Entity Tables that ALSO define relationships (One-to-Many) --
+    if (table == "projects") {
+      map_node(data, op, node_label, memgraphClient);
+      if (op != 'd' && data.contains("managed_by_user_id") &&
+          !data["managed_by_user_id"].is_null()) {
+        map_relationship(data, op, "User", "Project", "MANAGES",
+                         "managed_by_user_id", "id", memgraphClient);
+      }
+    } else if (table == "businesses") {
+      map_node(data, op, node_label, memgraphClient);
+      if (op != 'd') {
+        if (data.contains("operator_user_id") &&
+            !data["operator_user_id"].is_null())
+          map_relationship(data, op, "User", "Business", "OPERATES",
+                           "operator_user_id", "id", memgraphClient);
+        if (data.contains("business_type_id") &&
+            !data["business_type_id"].is_null())
+          map_relationship(data, op, "Business", "BusinessType", "IS_TYPE",
+                           "id", "business_type_id", memgraphClient);
+        if (data.contains("business_category_id") &&
+            !data["business_category_id"].is_null())
+          map_relationship(data, op, "Business", "BusinessCategory",
+                           "IN_CATEGORY", "id", "business_category_id",
+                           memgraphClient);
+      }
+    } else if (table == "skills") {
+      map_node(data, op, node_label, memgraphClient);
+      if (op != 'd' && data.contains("category_id") &&
+          !data["category_id"].is_null()) {
+        map_relationship(data, op, "Skill", "SkillCategory", "IN_CATEGORY",
+                         "id", "category_id", memgraphClient);
+      }
+    } else if (table == "strengths") {
+      map_node(data, op, node_label, memgraphClient);
+      if (op != 'd' && data.contains("category_id") &&
+          !data["category_id"].is_null()) {
+        map_relationship(data, op, "Strength", "StrengthCategory",
+                         "IN_CATEGORY", "id", "category_id", memgraphClient);
+      }
+    } else if (table == "industries") {
+      map_node(data, op, node_label, memgraphClient);
+      if (op != 'd' && data.contains("category_id") &&
+          !data["category_id"].is_null()) {
+        map_relationship(data, op, "Industry", "IndustryCategory",
+                         "IN_CATEGORY", "id", "category_id", memgraphClient);
+      }
+    } else if (table == "ideas") {
+      map_node(data, op, node_label, memgraphClient);
+      if (op != 'd' && data.contains("submitted_by_user_id") &&
+          !data["submitted_by_user_id"].is_null()) {
+        map_relationship(data, op, "User", "Idea", "SUBMITTED",
+                         "submitted_by_user_id", "id", memgraphClient);
+      }
+    }
     // -- Simple Entity Tables (become nodes) --
-    if (table == "users" || table == "skills" || table == "projects" ||
-        table == "businesses" || table == "regions" ||
-        table == "subscriptions" || table == "strengths" || table == "ideas" ||
-        table == "skill_categories" || table == "strength_categories" ||
-        table == "business_categories" || table == "business_types" ||
-        table == "business_phases" || table == "business_roles" ||
-        table == "connection_types" || table == "mastermind_roles" ||
-        table == "daily_activities" || table == "case_studies" ||
-        table == "industry_categories" || table == "industries" ||
-        table == "notifications" || table == "business_connections" ||
-        table == "user_posts") {
+    else if (table == "users" || table == "regions" ||
+             table == "subscriptions" || table == "skill_categories" ||
+             table == "strength_categories" || table == "business_categories" ||
+             table == "business_types" || table == "business_phases" ||
+             table == "business_roles" || table == "connection_types" ||
+             table == "mastermind_roles" || table == "daily_activities" ||
+             table == "case_studies" || table == "industry_categories" ||
+             table == "notifications" || table == "business_connections" ||
+             table == "user_posts") {
       map_node(data, op, node_label, memgraphClient);
     }
     // -- One-to-One Relationships (property merge) --
@@ -125,7 +191,6 @@ void MessageHandler::Process(RdKafka::Message *msg,
             "MERGE (u:User {id: $user_id}) SET u.loginEmail = $login_email";
         mg::Map params(2);
         params.Insert("user_id", mg::Value(data["user_id"].get<int>()));
-        // CORRECTED: Wrap the string in mg::Value()
         params.Insert("login_email",
                       mg::Value(get_string_or_default(data, "login_email")));
         memgraphClient.ExecuteQuery(query, params);
