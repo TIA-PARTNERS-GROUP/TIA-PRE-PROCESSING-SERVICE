@@ -1,28 +1,17 @@
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #include "../include/message_handler.hpp"
 
-// --- Helper Functions ---
-
-/// <summary>
-/// Safely retrieves a string from a JSON object. If the key doesn't exist, is
-/// null, or the value is a number, it handles the conversion or returns a
-/// default value.
-/// </summary>
-/// <param name="j">The constant reference to the JSON object to query.</param>
-/// <param name="key">The key of the value to retrieve.</param>
-/// <param name="def">The default string to return if the key is not found or
-/// the value is null. Defaults to an empty string.</param> <returns>The
-/// retrieved string, a string representation of a number, or the default
-/// value.</returns>
+// --- Helper Functions (Unchanged) ---
 std::string get_string_or_default(const json &j, const char *key,
                                   const std::string &def = "") {
   if (j.contains(key) && !j[key].is_null()) {
-    // Check if it's a number and convert to string if so
     if (j[key].is_number()) {
       return std::to_string(j[key].get<double>());
     }
@@ -31,19 +20,10 @@ std::string get_string_or_default(const json &j, const char *key,
   return def;
 }
 
-/// <summary>
-/// Converts a snake_case string to PascalCase for use as a graph node label.
-/// It capitalizes the first letter, removes underscores, and capitalizes the
-/// letter following an underscore. It also performs basic singularization
-/// (e.g., "users" becomes "User", "countries" becomes "Country").
-/// </summary>
-/// <param name="s">The input string in snake_case.</param>
-/// <returns>A string converted to PascalCase.</returns>
 std::string to_pascal_case(std::string s) {
   if (s.empty())
     return "";
 
-  // Handle pluralization (C++17 compatible)
   if (s.length() >= 3 && s.substr(s.length() - 3) == "ies") {
     s.pop_back();
     s.pop_back();
@@ -63,28 +43,30 @@ std::string to_pascal_case(std::string s) {
   return s;
 }
 
-// --- Generic Mapping Functions ---
+// --- Generic Mapping Functions with Caching Logic ---
 
-/// <summary>
-/// Creates, updates, or deletes a node in Memgraph.
-/// For create/update ('c'/'u'), it uses MERGE to create the node if it doesn't
-/// exist and sets/updates its properties. For delete ('d'), it finds the node
-/// by its ID and performs a DETACH DELETE.
-/// </summary>
-/// <param name="data">The JSON object containing the node's properties,
-/// including a unique 'id'.</param> <param name="op">The character representing
-/// the operation: 'c' (create), 'u' (update), or 'd' (delete).</param> <param
-/// name="label">The label to be used for the node in Memgraph.</param> <param
-/// name="client">A reference to the active MemgraphClient for query
-/// execution.</param>
 void map_node(const json &data, char op, const std::string &label,
-              MemgraphClient &client) {
-  const std::string query =
-      (op == 'd') ? "MATCH (n:" + label + " {id: $id}) DETACH DELETE n"
-                  : "MERGE (n:" + label + " {id: $id}) SET n += $props";
+              MemgraphClient &client,
+              std::unordered_map<std::string, std::string> &query_cache) {
+
+  std::string query;
+  const std::string cache_key = std::string(1, op) + "_node_" + label;
+
+  auto it = query_cache.find(cache_key);
+  if (it != query_cache.end()) {
+    query = it->second;
+  } else {
+    query = (op == 'd') ? "MATCH (n:" + label + " {id: $id}) DETACH DELETE n"
+                        : "MERGE (n:" + label + " {id: $id}) SET n += $props";
+    query_cache[cache_key] = query;
+  }
 
   mg::Map params(op == 'd' ? 1 : 2);
-  params.Insert("id", mg::Value(data["id"].get<int>()));
+  if (data["id"].is_string()) {
+    params.Insert("id", mg::Value(data["id"].get<std::string>()));
+  } else {
+    params.Insert("id", mg::Value(data["id"].get<int>()));
+  }
 
   if (op != 'd') {
     mg::Map props(data.size());
@@ -103,54 +85,101 @@ void map_node(const json &data, char op, const std::string &label,
   client.ExecuteQuery(query, params);
 }
 
-/// <summary>
-/// Creates or deletes a relationship between two existing nodes in Memgraph.
-/// It uses foreign key columns from the source data to identify the start and
-/// end nodes.
-/// </summary>
-/// <param name="data">The JSON object containing the foreign keys for the
-/// relationship.</param> <param name="op">The character representing the
-/// operation: 'c'/'u' (create) or 'd' (delete).</param> <param
-/// name="from_label">The label of the source node for the relationship.</param>
-/// <param name="to_label">The label of the target node for the
-/// relationship.</param> <param name="rel_type">The type of the relationship
-/// (e.g., "HAS_SKILL").</param> <param name="from_fk_col">The column name in
-/// 'data' that holds the ID of the source node.</param> <param
-/// name="to_fk_col">The column name in 'data' that holds the ID of the target
-/// node.</param> <param name="client">A reference to the active MemgraphClient
-/// for query execution.</param>
-void map_relationship(const json &data, char op, const std::string &from_label,
-                      const std::string &to_label, const std::string &rel_type,
-                      const std::string &from_fk_col,
-                      const std::string &to_fk_col, MemgraphClient &client) {
-  const std::string query =
-      (op == 'd')
-          ? "MATCH (a:" + from_label + " {id: $from_id})-[r:" + rel_type +
-                "]->(b:" + to_label + " {id: $to_id}) DELETE r"
-          : "MATCH (a:" + from_label + " {id: $from_id}) MATCH (b:" + to_label +
-                " {id: $to_id}) MERGE (a)-[:" + rel_type + "]->(b)";
+void map_relationship(
+    const json &data, char op, const std::string &from_label,
+    const std::string &to_label, const std::string &rel_type,
+    const std::string &from_fk_col, const std::string &to_fk_col,
+    MemgraphClient &client,
+    std::unordered_map<std::string, std::string> &query_cache) {
+
+  std::string query;
+  const std::string cache_key = std::string(1, op) + "_rel_" + from_label +
+                                "_" + rel_type + "_" + to_label;
+
+  auto it = query_cache.find(cache_key);
+  if (it != query_cache.end()) {
+    query = it->second;
+  } else {
+    query = (op == 'd')
+                ? "MATCH (a:" + from_label + " {id: $from_id})-[r:" + rel_type +
+                      "]->(b:" + to_label + " {id: $to_id}) DELETE r"
+                : "MATCH (a:" + from_label +
+                      " {id: $from_id}) MATCH (b:" + to_label +
+                      " {id: $to_id}) MERGE (a)-[:" + rel_type + "]->(b)";
+    query_cache[cache_key] = query;
+  }
 
   mg::Map params(2);
+  if (data[from_fk_col].is_string()) {
+    params.Insert("from_id", mg::Value(data[from_fk_col].get<std::string>()));
+  } else {
+    params.Insert("from_id", mg::Value(data[from_fk_col].get<int>()));
+  }
+  if (data[to_fk_col].is_string()) {
+    params.Insert("to_id", mg::Value(data[to_fk_col].get<std::string>()));
+  } else {
+    params.Insert("to_id", mg::Value(data[to_fk_col].get<int>()));
+  }
+  client.ExecuteQuery(query, params);
+}
+
+void map_relationship_with_props(
+    const json &data, char op, const std::string &from_label,
+    const std::string &to_label, const std::string &rel_type,
+    const std::string &from_fk_col, const std::string &to_fk_col,
+    const std::vector<std::string> &prop_keys, MemgraphClient &client,
+    std::unordered_map<std::string, std::string> &query_cache) {
+
+  std::string query;
+  const std::string cache_key = std::string(1, op) + "_rel_props_" +
+                                from_label + "_" + rel_type + "_" + to_label;
+
+  auto it = query_cache.find(cache_key);
+  if (it != query_cache.end()) {
+    query = it->second;
+  } else {
+    query = (op == 'd')
+                ? "MATCH (a:" + from_label + " {id: $from_id})-[r:" + rel_type +
+                      "]->(b:" + to_label + " {id: $to_id}) DELETE r"
+                : "MATCH (a:" + from_label +
+                      " {id: $from_id}) MATCH (b:" + to_label +
+                      " {id: $to_id}) MERGE (a)-[r:" + rel_type +
+                      "]->(b) SET r += $props";
+    query_cache[cache_key] = query;
+  }
+
+  mg::Map params(op == 'd' ? 2 : 3);
   params.Insert("from_id", mg::Value(data[from_fk_col].get<int>()));
   params.Insert("to_id", mg::Value(data[to_fk_col].get<int>()));
+
+  if (op != 'd') {
+    mg::Map props(prop_keys.size());
+    for (const auto &key : prop_keys) {
+      if (data.contains(key) && !data[key].is_null()) {
+        if (data[key].is_number_integer())
+          props.Insert(key, mg::Value(data[key].get<int>()));
+        else if (data[key].is_number_float())
+          props.Insert(key, mg::Value(data[key].get<double>()));
+        else if (data[key].is_boolean())
+          props.Insert(key, mg::Value(data[key].get<bool>()));
+        else
+          props.Insert(key,
+                       mg::Value(get_string_or_default(data, key.c_str())));
+      }
+    }
+    params.Insert("props", mg::Value(std::move(props)));
+  }
   client.ExecuteQuery(query, params);
 }
 
 // --- Main Processing Logic ---
 
-/// <summary>
-/// Processes a single Kafka message, expected to be a Debezium CDC event in
-/// JSON format. It parses the message, identifies the database operation and
-/// source table, and then routes the data to the appropriate mapping function
-/// to reflect the change in Memgraph.
-/// </summary>
-/// <param name="msg">A pointer to the consumed RdKafka::Message to be
-/// processed.</param> <param name="memgraphClient">A reference to the
-/// MemgraphClient used for all database interactions.</param> <exception
-/// cref="std::runtime_error">Throws if message processing fails, e.g., due to
-/// JSON parsing errors.</exception>
 void MessageHandler::Process(RdKafka::Message *msg,
                              MemgraphClient &memgraphClient) {
+  // Caches persist between calls to Process because they are static
+  static std::unordered_map<std::string, std::string> query_cache;
+  static std::unordered_map<std::string, std::string> label_cache;
+
   if (msg->len() == 0)
     return;
 
@@ -168,80 +197,120 @@ void MessageHandler::Process(RdKafka::Message *msg,
       return;
 
     std::string table = payload["source"]["table"].get<std::string>();
-    std::string node_label = to_pascal_case(table);
+
+    std::string node_label;
+    auto it = label_cache.find(table);
+    if (it != label_cache.end()) {
+      node_label = it->second;
+    } else {
+      node_label = to_pascal_case(table);
+      label_cache[table] = node_label;
+    }
 
     // --- MAPPING ROUTER ---
-    // This section acts as a router, directing the data from a specific table
-    // to the correct sequence of node and relationship mapping functions.
-
-    // -- Entity Tables that ALSO define relationships (One-to-Many) --
     if (table == "projects") {
-      map_node(data, op, node_label, memgraphClient);
+      map_node(data, op, node_label, memgraphClient, query_cache);
       if (op != 'd' && data.contains("managed_by_user_id") &&
           !data["managed_by_user_id"].is_null()) {
         map_relationship(data, op, "User", "Project", "MANAGES",
-                         "managed_by_user_id", "id", memgraphClient);
+                         "managed_by_user_id", "id", memgraphClient,
+                         query_cache);
       }
     } else if (table == "businesses") {
-      map_node(data, op, node_label, memgraphClient);
+      map_node(data, op, node_label, memgraphClient, query_cache);
       if (op != 'd') {
         if (data.contains("operator_user_id") &&
             !data["operator_user_id"].is_null())
           map_relationship(data, op, "User", "Business", "OPERATES",
-                           "operator_user_id", "id", memgraphClient);
+                           "operator_user_id", "id", memgraphClient,
+                           query_cache);
         if (data.contains("business_type_id") &&
             !data["business_type_id"].is_null())
           map_relationship(data, op, "Business", "BusinessType", "IS_TYPE",
-                           "id", "business_type_id", memgraphClient);
+                           "id", "business_type_id", memgraphClient,
+                           query_cache);
         if (data.contains("business_category_id") &&
             !data["business_category_id"].is_null())
           map_relationship(data, op, "Business", "BusinessCategory",
                            "IN_CATEGORY", "id", "business_category_id",
-                           memgraphClient);
+                           memgraphClient, query_cache);
+        if (data.contains("business_phase_id") &&
+            !data["business_phase_id"].is_null())
+          map_relationship(data, op, "Business", "BusinessPhase", "IN_PHASE",
+                           "id", "business_phase_id", memgraphClient,
+                           query_cache);
       }
     } else if (table == "skills") {
-      map_node(data, op, node_label, memgraphClient);
+      map_node(data, op, node_label, memgraphClient, query_cache);
       if (op != 'd' && data.contains("category_id") &&
           !data["category_id"].is_null()) {
         map_relationship(data, op, "Skill", "SkillCategory", "IN_CATEGORY",
-                         "id", "category_id", memgraphClient);
+                         "id", "category_id", memgraphClient, query_cache);
       }
     } else if (table == "strengths") {
-      map_node(data, op, node_label, memgraphClient);
+      map_node(data, op, node_label, memgraphClient, query_cache);
       if (op != 'd' && data.contains("category_id") &&
           !data["category_id"].is_null()) {
         map_relationship(data, op, "Strength", "StrengthCategory",
-                         "IN_CATEGORY", "id", "category_id", memgraphClient);
+                         "IN_CATEGORY", "id", "category_id", memgraphClient,
+                         query_cache);
       }
     } else if (table == "industries") {
-      map_node(data, op, node_label, memgraphClient);
+      map_node(data, op, node_label, memgraphClient, query_cache);
       if (op != 'd' && data.contains("category_id") &&
           !data["category_id"].is_null()) {
         map_relationship(data, op, "Industry", "IndustryCategory",
-                         "IN_CATEGORY", "id", "category_id", memgraphClient);
+                         "IN_CATEGORY", "id", "category_id", memgraphClient,
+                         query_cache);
       }
     } else if (table == "ideas") {
-      map_node(data, op, node_label, memgraphClient);
+      map_node(data, op, node_label, memgraphClient, query_cache);
       if (op != 'd' && data.contains("submitted_by_user_id") &&
           !data["submitted_by_user_id"].is_null()) {
         map_relationship(data, op, "User", "Idea", "SUBMITTED",
-                         "submitted_by_user_id", "id", memgraphClient);
+                         "submitted_by_user_id", "id", memgraphClient,
+                         query_cache);
       }
-    }
-    // -- Simple Entity Tables (become nodes) --
-    else if (table == "users" || table == "regions" ||
-             table == "subscriptions" || table == "skill_categories" ||
-             table == "strength_categories" || table == "business_categories" ||
-             table == "business_types" || table == "business_phases" ||
-             table == "business_roles" || table == "connection_types" ||
-             table == "mastermind_roles" || table == "daily_activities" ||
-             table == "case_studies" || table == "industry_categories" ||
-             table == "notifications" || table == "business_connections" ||
-             table == "user_posts") {
-      map_node(data, op, node_label, memgraphClient);
-    }
-    // -- One-to-One Relationships (property merge) --
-    else if (table == "user_logins") {
+    } else if (table == "user_posts") {
+      map_node(data, op, node_label, memgraphClient, query_cache);
+      if (op != 'd' && data.contains("poster_user_id") &&
+          !data["poster_user_id"].is_null()) {
+        map_relationship(data, op, "User", "UserPost", "CREATED",
+                         "poster_user_id", "id", memgraphClient, query_cache);
+      }
+    } else if (table == "case_studies") { // NEW
+      map_node(data, op, node_label, memgraphClient, query_cache);
+      if (op != 'd' && data.contains("owner_user_id") &&
+          !data["owner_user_id"].is_null()) {
+        map_relationship(data, op, "User", "CaseStudy", "OWNS", "owner_user_id",
+                         "id", memgraphClient, query_cache);
+      }
+    } else if (table == "notifications") { // NEW
+      map_node(data, op, node_label, memgraphClient, query_cache);
+      if (op != 'd') {
+        if (data.contains("sender_user_id") &&
+            !data["sender_user_id"].is_null()) {
+          map_relationship(data, op, "User", "Notification", "SENT",
+                           "sender_user_id", "id", memgraphClient, query_cache);
+        }
+        if (data.contains("receiver_user_id") &&
+            !data["receiver_user_id"].is_null()) {
+          map_relationship(data, op, "Notification", "User", "RECEIVED_BY",
+                           "id", "receiver_user_id", memgraphClient,
+                           query_cache);
+        }
+      }
+    } else if (table == "users" || table == "regions" ||
+               table == "subscriptions" || table == "skill_categories" ||
+               table == "strength_categories" ||
+               table == "business_categories" || table == "business_types" ||
+               table == "business_phases" || table == "business_roles" ||
+               table == "business_skills" || table == "business_strengths" ||
+               table == "connection_types" || table == "mastermind_roles" ||
+               table == "daily_activities" || table == "industry_categories") {
+      // 'case_studies' and 'notifications' were removed from this list
+      map_node(data, op, node_label, memgraphClient, query_cache);
+    } else if (table == "user_logins") {
       if (op != 'd') {
         const std::string query =
             "MERGE (u:User {id: $user_id}) SET u.loginEmail = $login_email";
@@ -251,43 +320,75 @@ void MessageHandler::Process(RdKafka::Message *msg,
                       mg::Value(get_string_or_default(data, "login_email")));
         memgraphClient.ExecuteQuery(query, params);
       }
-    }
-    // -- Join Tables (become relationships) --
-    else if (table == "project_regions") {
+    } else if (table == "business_connections") {
+      map_node(data, op, "BusinessConnection", memgraphClient, query_cache);
+      if (op != 'd') {
+        const std::string query =
+            "MATCH (initiator:Business {id: $initiating_id}) MATCH "
+            "(receiver:Business {id: $receiving_id}) MATCH "
+            "(conn:BusinessConnection {id: $conn_id}) MERGE "
+            "(initiator)-[:INITIATED_CONNECTION]->(conn) MERGE "
+            "(conn)-[:RECEIVED_BY]->(receiver)";
+        mg::Map params(3);
+        params.Insert("initiating_id",
+                      mg::Value(data["initiating_business_id"].get<int>()));
+        params.Insert("receiving_id",
+                      mg::Value(data["receiving_business_id"].get<int>()));
+        params.Insert("conn_id", mg::Value(data["id"].get<int>()));
+        memgraphClient.ExecuteQuery(query, params);
+
+        if (data.contains("connection_type_id") &&
+            !data["connection_type_id"].is_null()) {
+          map_relationship(data, op, "BusinessConnection", "ConnectionType",
+                           "HAS_TYPE", "id", "connection_type_id",
+                           memgraphClient, query_cache);
+        }
+      }
+    } else if (table == "project_regions") {
       map_relationship(data, op, "Project", "Region", "IN_REGION", "project_id",
-                       "region_id", memgraphClient);
+                       "region_id", memgraphClient, query_cache);
     } else if (table == "user_skills") {
       map_relationship(data, op, "User", "Skill", "HAS_SKILL", "user_id",
-                       "skill_id", memgraphClient);
+                       "skill_id", memgraphClient, query_cache);
     } else if (table == "user_strengths") {
       map_relationship(data, op, "User", "Strength", "HAS_STRENGTH", "user_id",
-                       "strength_id", memgraphClient);
+                       "strength_id", memgraphClient, query_cache);
     } else if (table == "project_business_skills") {
       map_relationship(data, op, "Project", "BusinessSkill", "REQUIRES_SKILL",
-                       "project_id", "business_skill_id", memgraphClient);
+                       "project_id", "business_skill_id", memgraphClient,
+                       query_cache);
     } else if (table == "project_business_categories") {
       map_relationship(data, op, "Project", "BusinessCategory", "IN_CATEGORY",
-                       "project_id", "business_category_id", memgraphClient);
+                       "project_id", "business_category_id", memgraphClient,
+                       query_cache);
     } else if (table == "daily_activity_enrolments") {
       map_relationship(data, op, "User", "DailyActivity", "ENROLLED_IN",
-                       "user_id", "daily_activity_id", memgraphClient);
-    } else if (table == "idea_votes") {
-      map_relationship(data, op, "User", "Idea", "VOTED_FOR", "voter_user_id",
-                       "idea_id", memgraphClient);
-    } else if (table == "user_subscriptions") {
-      map_relationship(data, op, "User", "Subscription", "HAS_SUBSCRIPTION",
-                       "user_id", "subscription_id", memgraphClient);
+                       "user_id", "daily_activity_id", memgraphClient,
+                       query_cache);
     } else if (table == "user_business_strengths") {
       map_relationship(data, op, "User", "BusinessStrength",
                        "HAS_BUSINESS_STRENGTH", "user_id",
-                       "business_strength_id", memgraphClient);
-    } else if (table == "user_daily_activity_progress") {
-      map_relationship(data, op, "User", "DailyActivity", "HAS_PROGRESS_IN",
-                       "user_id", "daily_activity_id", memgraphClient);
+                       "business_strength_id", memgraphClient, query_cache);
     } else if (table == "connection_mastermind_roles") {
       map_relationship(data, op, "BusinessConnection", "MastermindRole",
                        "HAS_MASTERMIND_ROLE", "connection_id",
-                       "mastermind_role_id", memgraphClient);
+                       "mastermind_role_id", memgraphClient, query_cache);
+    } else if (table == "idea_votes") {
+      map_relationship_with_props(data, op, "User", "Idea", "VOTED_ON",
+                                  "voter_user_id", "idea_id", {"type"},
+                                  memgraphClient, query_cache);
+    } else if (table == "user_subscriptions") {
+      map_relationship_with_props(
+          data, op, "User", "Subscription", "HAS_SUBSCRIPTION", "user_id",
+          "subscription_id",
+          {"date_from", "date_to", "price", "total", "tax_amount", "tax_rate",
+           "trial_from", "trial_to"},
+          memgraphClient, query_cache);
+    } else if (table == "user_daily_activity_progress") {
+      map_relationship_with_props(data, op, "User", "DailyActivity",
+                                  "HAS_PROGRESS_IN", "user_id",
+                                  "daily_activity_id", {"progress", "date"},
+                                  memgraphClient, query_cache);
     }
 
     std::cout << "[SUCCESS] Processed op '" << op << "' for table '" << table
